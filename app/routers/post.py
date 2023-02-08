@@ -1,6 +1,6 @@
 from fastapi import status, HTTPException, Depends, Response, APIRouter
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
 
 from .. import models, schemas, oauth2
 from ..database import get_db
@@ -10,11 +10,14 @@ router = APIRouter(
     tags=['Posts']
 )
 
+
 @router.get("/", response_model=List[schemas.PostResponse])
-def get_posts(db: Session = Depends(get_db), current_user: int = Depends(oauth2.get_current_user)):
+def get_posts(db: Session = Depends(get_db), current_user: int = Depends(oauth2.get_current_user),
+              limit: int = 10, skip: int = 0, search: Optional[str] = ""):
     # cursor.execute(''' SELECT * FROM posts ''')
     # posts = cursor.fetchall()
-    posts = db.query(models.Post).all()
+    print(search)
+    posts = db.query(models.Post).filter(models.Post.title.contains(search)).limit(limit).offset(skip).all()
     return posts
 
 
@@ -35,14 +38,14 @@ def get_post(id: int, db: Session = Depends(get_db), current_user: int = Depends
 
 @router.post("/", status_code=status.HTTP_201_CREATED, response_model=schemas.PostResponse)
 def create_posts(post: schemas.PostCreate, db: Session = Depends(get_db),
-                current_user: int = Depends(oauth2.get_current_user)):
+                 current_user: int = Depends(oauth2.get_current_user)):
     # cursor.execute(''' INSERT INTO posts (title, content, published) VALUES (%s, %s, %s) RETURNING * ''',
     #                (post.title, post.content, post.published))
     # new_post = cursor.fetchone()
     # conn.commit()
 
-    print(current_user)
-    new_post = models.Post(**post.dict())
+    print(current_user.id)
+    new_post = models.Post(user_id=current_user.id, **post.dict())
     db.add(new_post)
     db.commit()
     db.refresh(new_post)
@@ -56,13 +59,21 @@ def delete_post(id: int, db: Session = Depends(get_db), current_user: int = Depe
     # deleted_post = cursor.fetchone()
     # conn.commit()
 
-    deleted_post = db.query(models.Post).filter(models.Post.id == id)
-    if(deleted_post.first() == None):
+    post_query = db.query(models.Post).filter(models.Post.id == id)
+    deleted_post = post_query.first()
+
+    if (deleted_post == None):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Not found"
         )
-    deleted_post.delete(synchronize_session=False)
+    if (deleted_post.user_id != int(current_user.id)):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to perform the requested action"
+        )
+
+    post_query.delete(synchronize_session=False)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -75,12 +86,20 @@ def update_post(id: int, post: schemas.PostCreate, db: Session = Depends(get_db)
     # updated_post = cursor.fetchone()
     # conn.commit()
 
-    updated_post = db.query(models.Post).filter(models.Post.id == id)
-    if (updated_post.first() == None):
+    post_query = db.query(models.Post).filter(models.Post.id == id)
+    updated_post = post_query.first()
+    if (updated_post == None):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Not found"
         )
-    updated_post.update(post.dict(), synchronize_session=False)
+
+    if (updated_post.user_id != int(current_user.id)):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to perform the requested action"
+        )
+
+    post_query.update(post.dict(), synchronize_session=False)
     db.commit()
-    return updated_post.first()
+    return updated_post
